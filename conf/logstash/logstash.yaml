@@ -1,0 +1,121 @@
+input {
+    beats {
+         port => 5044
+         ssl => true
+         ssl_certificate => ["/etc/logstash/logstash.crt"]
+         ssl_key => ["/etc/logstash/logstash.key"]
+         type => "transactions"
+      }
+}
+
+filter {
+  grok {
+   match => { "message" => "%{WORD:State} + %{NONNEGINT:RecvQ:int} + %{NONNEGINT:SendQ:int}+\ +%{IPV4:destip}:%{POSINT:dport}+\ +%{IPV4:srcip}:%{POSINT:sport}%{SPACE}(?m)%{SPACE}(bbr)?%{SPACE}(cubic)?%{SPACE}(wscale:%{BASE10NUM:SendWindowScale:int},%{BASE10NUM:RecvWindowscale:int})?%{SPACE}(rto:%{POSINT:retranstimeout:int})?%{SPACE}(backoff:%{NOTSPACE:backoff:int})?%{SPACE}(rtt:%{BASE10NUM:RoundTripTime:float}/%{BASE10NUM:RoundTripVariance:float})?%{SPACE}(ato:%{POSINT:ato:int})?%{SPACE}(mss:%{POSINT:mss:int})?%{SPACE}(rcvmss:%{POSINT:ClientMSS:int})?%{SPACE}(advmss:%{POSINT:AdvMSS:int})?%{SPACE}(cwnd:%{POSINT:Cwnd:int})?%{SPACE}(bytes_acked:%{POSINT:BytesACK:int})?%{SPACE}(bytes_received:%{POSINT:BytesRecv:int})?%{SPACE}(segs_out:%{POSINT:SegsOut:int})?%{SPACE}(segs_in:%{POSINT:SegsIn:int})?%{SPACE}(data_segs_out:%{POSINT:DataSegsOut:int})?%{SPACE}(data_segs_in:%{POSINT:DataSegsIn:int})?%{SPACE}(bbr:%{NOTSPACE:[@metadata][bbrdetails]})?%{SPACE}(send%{SPACE}%{BASE10NUM:[@metadata][snumber]:float}(?<sunits_prefix>[KMG])(?<sunits_base>[bps]+))?%{SPACE}(lastsnd:%{POSINT:LastSend:int})?%{SPACE}(lastrcv:%{POSINT:LastRecv:int})?%{SPACE}(lastack:%{POSINT:LastAck:int})?%{SPACE}(pacing_rate%{SPACE}%{BASE10NUM:[@metadata][pnumber]:float}(?<punits_prefix>[KMG])(?<punits_base>[bps]+))?%{SPACE}(delivery_rate%{SPACE}%{BASE10NUM:[@metadata][dnumber]:float}(?<dunits_prefix>[KMG])(?<dunits_base>[bps]+))?%{SPACE}(app_limited%{SPACE:AppLimited})?%{SPACE}(busy:%{NOTSPACE:BusyTime})?%{SPACE}(rwnd_limited:%{NOTSPACE:Rwnd_Limited})?%{SPACE}(sndbuf_limited:%{NOTSPACE:SndBuf_Limited})?%{SPACE}(unacked:%{POSINT:UnackedPkts:int})?%{SPACE}(retrans:%{BASE10NUM:RetransOut:int}[//]%{BASE10NUM:RetransTotal:int})?%{SPACE}(rcv_space:%{POSINT:RcvSpace:int})?%{SPACE}(minrtt:%{BASE10NUM:MinRTT:float})?"}
+   }
+
+   if "_grokparsefailure" in [tags] {
+       drop {}
+   }
+
+   # To Identify type of data ( summary or live )
+   if [State] == "UNCONN" {
+       mutate { add_field => { "StatType" => "Summary" }  }
+       mutate { add_field => { "StatTypeId" => 1 }  }
+   } else if [State] == "ESTAB" {
+       mutate { add_field => { "StatType" => "Live" }  }
+       mutate { add_field => { "StatTypeId" => 2 }  }
+   } else {
+      mutate { add_field => { "StatType" => "Unknown" }  }
+      mutate { add_field => { "StatTypeId" => 3 }  }
+   }
+   mutate { convert => { "StatTypeId" => "integer" }   }
+
+   # To Identify Traffic type ( Client2Pop or PoP2Origin)
+   if [dport] == "8082" {
+      mutate { add_field => { "Traffic" => "Client2PoP" }  }
+      mutate { add_field => { "TrafficId" => 1 }  }
+      mutate { convert => { "TrafficId" => "integer" }   }
+   } else if [sport] == "8082" {  # Peer port
+      mutate { add_field => { "Traffic" => "PoP2Origin" }  }
+      mutate { add_field => { "TrafficId" => 2 }  }
+      mutate { convert => { "TrafficId" => "integer" }   }
+   } else {
+       drop {}
+   }
+
+   # To Identify Congestion algo ( TODO: Bala. Parse and identify )
+   if ( [host] and [host] == "ams3b01c-8cwc" ) {
+      mutate { add_field => { "BBR" => 1 }  }
+      mutate { convert => { "BBR" => "integer" }   }
+   } else {  
+      mutate { add_field => { "BBR" => 0 }  }
+      mutate { convert => { "BBR" => "integer" }   }
+   } 
+
+  # Convert Send rate to bps
+   mutate {
+     add_field => {
+            "[@metadata][sunits_prefix]" => "%{sunits_prefix}"
+            "[@metadata][sunits_base]" => "%{sunits_base}"
+            "[@metadata][punits_prefix]" => "%{punits_prefix}"
+            "[@metadata][punits_base]" => "%{punits_base}"
+            "[@metadata][dunits_prefix]" => "%{dunits_prefix}"
+            "[@metadata][dunits_base]" => "%{dunits_base}"
+        }
+        remove_field => [ "sunits_prefix", "sunits_base",  "punits_prefix", "punits_base",  "dunits_prefix", "dunits_base" ]
+    }
+    if [@metadata][sunits_prefix] == "K" {
+        mutate { add_field => { "[@metadata][send_multiplier]" => 1000 } }
+    } else if [@metadata][sunits_prefix] == "M" {
+        mutate { add_field => { "[@metadata][send_multiplier]" => 1000000 } }
+    } else if [@metadata][sunits_prefix] == "G" {
+        mutate { add_field => { "[@metadata][send_multiplier]" => 1000000000 } }
+    } else {    # By default. bps
+        mutate { add_field => { "[@metadata][send_multiplier]" => 1 } }
+    }
+
+    if [@metadata][punits_prefix] == "K" {
+        mutate { add_field => { "[@metadata][pacing_multiplier]" => 1000 } }
+    } else if [@metadata][punits_prefix] == "M" {
+        mutate { add_field => { "[@metadata][pacing_multiplier]" => 1000000 } }
+    } else if [@metadata][punits_prefix] == "G" {
+        mutate { add_field => { "[@metadata][pacing_multiplier]" => 1000000000 } }
+    } else {    # By default. bps
+        mutate { add_field => { "[@metadata][pacing_multiplier]" => 1 } }
+    }
+
+    if [@metadata][dunits_prefix] == "K" {
+        mutate { add_field => { "[@metadata][delivery_multiplier]" => 1000 } }
+    } else if [@metadata][dunits_prefix] == "M" {
+        mutate { add_field => { "[@metadata][delivery_multiplier]" => 1000000 } }
+    } else if [@metadata][dunits_prefix] == "G" {
+        mutate { add_field => { "[@metadata][delivery_multiplier]" => 1000000000 } }
+    } else {    # By default. bps
+        mutate { add_field => { "[@metadata][delivery_multiplier]" => 1 } }
+    }
+
+    mutate {   convert => { "[@metadata][send_multiplier]" => "integer" }   }
+    mutate {   convert => { "[@metadata][pacing_multiplier]" => "integer" }   }
+    mutate {   convert => { "[@metadata][delivery_multiplier]" => "integer" }   }
+
+    if ( [@metadata][snumber] and  [@metadata][snumber] > 0 ) {
+        ruby { code => 'event.set("SendRate", event.get("[@metadata][snumber]") * event.get("[@metadata][send_multiplier]") )' }
+    }
+    if ( [@metadata][pnumber] and [@metadata][pnumber] > 0 )  {
+        ruby { code => 'event.set("PacingRate", event.get("[@metadata][pnumber]") * event.get("[@metadata][pacing_multiplier]") )' }
+    }
+    if ( [@metadata][dnumber] and [@metadata][dnumber] > 0 ) {
+        ruby { code => 'event.set("DeliveryRate", event.get("[@metadata][dnumber]") * event.get("[@metadata][delivery_multiplier]") )' }
+    }
+}
+
+output {
+  elasticsearch {
+       hosts => ["localhost:9200"]
+       index => "ss-data-"
+       template => "/etc/logstash/conf.d/ss-data-template.json"
+       template_name => "template_socket_stat"
+       template_overwrite => true
+ }
+  stdout { codec => rubydebug { metadata => false } }
+}

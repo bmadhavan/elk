@@ -1,0 +1,3 @@
+To install filebeats version 5.2.0:
+curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-5.2.0-amd64.deb
+sudo dpkg -i filebeat-5.2.0-amd64.deb
