@@ -1,3 +1,24 @@
-To install filebeats version 5.2.0:
+This document outlines the steps needed for INSTALLING and CONFIGURING filebeats on the host
+from where the logs or data needs to shipped 
+
+
+# To install filebeats version 5.2.0,
+```sh
 curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-5.2.0-amd64.deb
 sudo dpkg -i filebeat-5.2.0-amd64.deb
+```
+
+# To Edit
+Edit the appropriate logstash server IP:port and SSL certs.
+
+# Other settings controlled by filebeats.yml
+
+## DATA source 
+The above configuration picks all *.log files in '/var/log/socket_stat/' folder 
+
+## Multiline  
+Since ss has multiple lines of logs,
+Anyline that starts with a space is considered as a continuation of the previous entry. 
+
+
+
